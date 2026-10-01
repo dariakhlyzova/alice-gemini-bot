@@ -4,9 +4,6 @@ from google import genai
 
 app = Flask(__name__)
 
-# Получаем API ключ
-api_key = os.environ.get("GEMINI_API_KEY")
-
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json() or {}
@@ -15,7 +12,7 @@ def webhook():
     command = user_request.get('command', '').strip()
     is_new = data.get('session', {}).get('new', False)
     
-    # При старте навыка
+    # При приветствии / старте
     if is_new or not command:
         return jsonify({
             'response': {
@@ -25,23 +22,32 @@ def webhook():
             'version': '1.0'
         })
     
-    # Обращение к Gemini
+    # Запрос к Gemini
     try:
-        # Инициализируем клиент с ключом
+        api_key = os.environ.get("GEMINI_API_KEY")
         client = genai.Client(api_key=api_key)
         
+        # Используем актуальное имя модели
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.0-flash',
             contents=command,
         )
-        reply_text = response.text if response.text else "Gemini прислал пустой ответ."
+        reply_text = response.text if response.text else "Gemini вернул пустой ответ."
     except Exception as e:
         print(f"Gemini API Error: {e}")
-        reply_text = f" Ошибка API: {str(e)[:100]}"
+        # Если 2.0-flash не сработает, пробуем fallback на 1.5-flash-latest
+        try:
+            response = client.models.generate_content(
+                model='gemini-1.5-flash-latest',
+                contents=command,
+            )
+            reply_text = response.text if response.text else "Gemini вернул пустой ответ."
+        except Exception as err:
+            reply_text = f"Ошибка API: {str(err)[:120]}"
         
     return jsonify({
         'response': {
-            'text': reply_text[:1000], # Ограничение длины Алисы
+            'text': reply_text[:1000],  # Лимит Алисы
             'end_session': False
         },
         'version': '1.0'
