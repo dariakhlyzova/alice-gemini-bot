@@ -1,16 +1,8 @@
 import os
+import requests
 from flask import Flask, request, jsonify
-from google import genai
 
 app = Flask(__name__)
-
-# Список моделей для проверки по очереди
-MODELS_TO_TRY = [
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
-    'gemini-2.5-flash',
-    'gemini-flash'
-]
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -30,42 +22,43 @@ def webhook():
             'version': '1.0'
         })
     
-    # Отправка запроса в Gemini
+    # Проверяем наличие ключа
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return jsonify({
             'response': {
-                'text': ' Ошибка: Не задан GEMINI_API_KEY в Render.',
+                'text': 'Ошибка: Не задан GEMINI_API_KEY в настройках Render.',
                 'end_session': False
             },
             'version': '1.0'
         })
 
-    client = genai.Client(api_key=api_key)
-    reply_text = None
-    last_error = ""
-
-    # Перебираем варианты моделей
-    for model_name in MODELS_TO_TRY:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=command,
-            )
-            if response.text:
-                reply_text = response.text
-                break
-        except Exception as e:
-            last_error = str(e)
-            print(f"Failed with {model_name}: {e}")
-            continue
-
-    if not reply_text:
-        reply_text = f" Ошибка API: {last_error[:120]}"
+    # Прямой HTTP-запрос к официальному REST API Gemini 2.0 Flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    
+    payload = {
+        "contents": [{
+            "parts": [{"text": command}]
+        }]
+    }
+    
+    try:
+        res = requests.post(url, json=payload, timeout=12)
+        res_data = res.json()
+        
+        if res.status_code == 200:
+            reply_text = res_data['candidates'][0]['content']['parts'][0]['text']
+        else:
+            err_msg = res_data.get('error', {}).get('message', res.text)
+            reply_text = f"Ошибка API ({res.status_code}): {err_msg[:120]}"
+            
+    except Exception as e:
+        print(f"Request Error: {e}")
+        reply_text = f"Ошибка соединения с Gemini: {str(e)[:100]}"
 
     return jsonify({
         'response': {
-            'text': reply_text[:1000],  # Лимит Алисы
+            'text': reply_text[:1000],  # Ограничение длины ответа Алисы
             'end_session': False
         },
         'version': '1.0'
