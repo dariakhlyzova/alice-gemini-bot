@@ -4,9 +4,8 @@ from google import genai
 
 app = Flask(__name__)
 
-# Инициализируем клиент Gemini
+# Получаем API ключ
 api_key = os.environ.get("GEMINI_API_KEY")
-client = genai.Client(api_key=api_key) if api_key else None
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -16,7 +15,7 @@ def webhook():
     command = user_request.get('command', '').strip()
     is_new = data.get('session', {}).get('new', False)
     
-    # При приветствии
+    # При старте навыка
     if is_new or not command:
         return jsonify({
             'response': {
@@ -26,20 +25,23 @@ def webhook():
             'version': '1.0'
         })
     
-    # Запрос к Gemini
+    # Обращение к Gemini
     try:
+        # Инициализируем клиент с ключом
+        client = genai.Client(api_key=api_key)
+        
         response = client.models.generate_content(
             model='gemini-1.5-flash',
-            contents=command
+            contents=command,
         )
-        reply_text = response.text if response.text else "Не удалось получить текст ответа."
+        reply_text = response.text if response.text else "Gemini прислал пустой ответ."
     except Exception as e:
         print(f"Gemini API Error: {e}")
-        reply_text = "Произошла ошибка при вызове Gemini API."
+        reply_text = f" Ошибка API: {str(e)[:100]}"
         
     return jsonify({
         'response': {
-            'text': reply_text[:1000],  # Ограничение длины ответа для Алисы
+            'text': reply_text[:1000], # Ограничение длины Алисы
             'end_session': False
         },
         'version': '1.0'
