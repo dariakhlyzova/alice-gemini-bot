@@ -4,6 +4,13 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
+# Список моделей от самой приоритетной к резервным
+MODELS_TO_TRY = [
+    "gemini-3.8-flash",
+    "gemini-2.5-flash",
+    "gemini-1.5-flash"
+]
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json() or {}
@@ -32,33 +39,40 @@ def webhook():
             'version': '1.0'
         })
 
-    # Прямой запрос к актуальной модели gemini-3.8-flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={api_key}"
-    payload = {
-        "contents": [{
-            "parts": [{"text": command}]
-        }]
-    }
-    
-    try:
-        # Тайм-аут 3 секунды, чтобы железобетонно уложиться в 4.5с Яндекса
-        res = requests.post(url, json=payload, timeout=3.0)
-        res_data = res.json()
+    reply_text = None
+    last_error = ""
+
+    # Пробуем отправить запрос, перебирая модели при 503 / 404
+    for model_name in MODELS_TO_TRY:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{
+                "parts": [{"text": command}]
+            }]
+        }
         
-        if res.status_code == 200:
-            reply_text = res_data['candidates'][0]['content']['parts'][0]['text']
-        else:
-            err_msg = res_data.get('error', {}).get('message', res.text)
-            reply_text = f"Ошибка API ({res.status_code}): {err_msg[:120]}"
+        try:
+            # Небольшой тайм-аут на каждую попытку, чтобы суммарно успеть до 4.5с
+            res = requests.post(url, json=payload, timeout=2.0)
+            res_data = res.json()
             
-    except requests.exceptions.Timeout:
-        reply_text = "Gemini отвечает слишком долго, попробуйте спросить ещё раз."
-    except Exception as e:
-        reply_text = f"Ошибка связи: {str(e)[:100]}"
+            if res.status_code == 200:
+                reply_text = res_data['candidates'][0]['content']['parts'][0]['text']
+                break  # Успех — выходим из цикла!
+            else:
+                err_msg = res_data.get('error', {}).get('message', res.text)
+                last_error = f"{res.status_code}: {err_msg[:80]}"
+                # Если 503 или 404 — цикл идет к следующей модели
+        except Exception as e:
+            last_error = str(e)[:80]
+            continue
+
+    if not reply_text:
+        reply_text = f"Сервер временно перегружен ({last_error}). Попробуйте ещё раз через пару секунд."
 
     return jsonify({
         'response': {
-            'text': reply_text[:1000],  # Лимит Алисы по длине
+            'text': reply_text[:1000],  # Ограничение Алисы
             'end_session': False
         },
         'version': '1.0'
