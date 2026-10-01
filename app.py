@@ -32,17 +32,36 @@ def webhook():
             'version': '1.0'
         })
 
-    # Отправляем единичный запрос к модели gemini-1.5-flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-    payload = {
-        "contents": [{
-            "parts": [{"text": command}]
-        }]
-    }
-    
     try:
-        # Тайм-аут 3.5 секунды, чтобы уложиться в лимит Яндекса
-        res = requests.post(url, json=payload, timeout=3.5)
+        # 1. Запрашиваем у Google список всех доступных для нашего ключа моделей
+        models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        models_res = requests.get(models_url, timeout=3)
+        
+        selected_model = None
+        if models_res.status_code == 200:
+            models_list = models_res.json().get('models', [])
+            # Ищем любую генеративную модель flash или pro
+            for m in models_list:
+                methods = m.get('supportedGenerationMethods', [])
+                if 'generateContent' in methods:
+                    # m['name'] возвращает полный путь, например "models/gemini-..."
+                    selected_model = m['name']
+                    if 'flash' in selected_model:
+                        break  # Приоритет отдаем быстрой модели flash
+
+        # Если список не получился, берем дефолтный эндпоинт
+        if not selected_model:
+            selected_model = "models/gemini-1.5-flash"
+
+        # 2. Отправляем запрос к автоматически выбранной рабочей модели
+        generate_url = f"https://generativelanguage.googleapis.com/v1beta/{selected_model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{
+                "parts": [{"text": command}]
+            }]
+        }
+        
+        res = requests.post(generate_url, json=payload, timeout=3.5)
         res_data = res.json()
         
         if res.status_code == 200:
@@ -52,7 +71,7 @@ def webhook():
             reply_text = f"Ошибка API ({res.status_code}): {err_msg[:120]}"
             
     except requests.exceptions.Timeout:
-        reply_text = "Gemini ответил слишком долго, попробуйте повторить запрос."
+        reply_text = "Gemini ответил слишком долго, повторите запрос."
     except Exception as e:
         reply_text = f"Ошибка: {str(e)[:100]}"
 
