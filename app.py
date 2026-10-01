@@ -4,11 +4,10 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# Список моделей от самой приоритетной к резервным
+# Сначала самая быстрая Lite-модель, затем резервная
 MODELS_TO_TRY = [
-    "gemini-3.8-flash",
-    "gemini-2.5-flash",
-    "gemini-1.5-flash"
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash"
 ]
 
 @app.route('/webhook', methods=['POST'])
@@ -19,7 +18,7 @@ def webhook():
     command = user_request.get('command', '').strip()
     is_new = data.get('session', {}).get('new', False)
     
-    # При приветствии / первом запуске
+    # Режим приветствия (при запуске навыка)
     if is_new or not command:
         return jsonify({
             'response': {
@@ -42,7 +41,6 @@ def webhook():
     reply_text = None
     last_error = ""
 
-    # Пробуем отправить запрос, перебирая модели при 503 / 404
     for model_name in MODELS_TO_TRY:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         payload = {
@@ -52,27 +50,26 @@ def webhook():
         }
         
         try:
-            # Небольшой тайм-аут на каждую попытку, чтобы суммарно успеть до 4.5с
-            res = requests.post(url, json=payload, timeout=2.0)
+            # Маленький тайм-аут 2.5с для максимальной скорости Алисы
+            res = requests.post(url, json=payload, timeout=2.5)
             res_data = res.json()
             
             if res.status_code == 200:
                 reply_text = res_data['candidates'][0]['content']['parts'][0]['text']
-                break  # Успех — выходим из цикла!
+                break
             else:
                 err_msg = res_data.get('error', {}).get('message', res.text)
                 last_error = f"{res.status_code}: {err_msg[:80]}"
-                # Если 503 или 404 — цикл идет к следующей модели
         except Exception as e:
             last_error = str(e)[:80]
             continue
 
     if not reply_text:
-        reply_text = f"Сервер временно перегружен ({last_error}). Попробуйте ещё раз через пару секунд."
+        reply_text = f"Ошибка API: {last_error[:120]}"
 
     return jsonify({
         'response': {
-            'text': reply_text[:1000],  # Ограничение Алисы
+            'text': reply_text[:1000],  # Лимит длины ответа Алисы
             'end_session': False
         },
         'version': '1.0'
